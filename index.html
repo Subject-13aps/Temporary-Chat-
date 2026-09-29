@@ -9,149 +9,211 @@
 <body>
 <div id="app">
 
-  <!-- ============ HOME ============ -->
-  <section id="screen-home" class="screen">
-    <header class="topbar">
-      <h1>Messages</h1>
-      <button class="icon-btn" id="btn-add" aria-label="Add friends">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M16 19v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
-      </button>
-    </header>
-    <div class="search-wrap"><input id="search-input" placeholder="Search" autocomplete="off"></div>
-    <ul class="chat-list" id="chat-list"></ul>
-    <p class="empty-state" id="empty-home">No chats yet. Tap the + above to create or join a room.</p>
-    <nav class="bottom-nav">
-      <button data-tab="servers">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/></svg>
-        <span>Servers</span>
-      </button>
-      <button data-tab="messages" class="active">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l1.8-3.6A8.5 8.5 0 1 1 21 11.5Z"/></svg>
-        <span>Messages</span>
-      </button>
-      <button data-tab="notifications">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9Z"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>
-        <span>Notifications</span>
-      </button>
-      <button data-tab="you">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
-        <span>You</span>
-      </button>
-    </nav>
+  <!-- ============ APP LOCK GATE (overlays everything else) ============ -->
+  <section id="screen-lock" class="screen hidden">
+    <header class="topbar"><h1>Locked</h1></header>
+    <form id="form-lock" class="pane result-card">
+      <p class="hint">Enter your App Lock password to continue.</p>
+      <label>Password<input id="lock-password" type="password" required autocomplete="off"></label>
+      <p id="lock-error" class="hint"></p>
+      <button type="submit" class="btn-primary">Unlock</button>
+    </form>
   </section>
 
-  <!-- ============ SERVERS (placeholder) ============ -->
+  <!-- ============ ONBOARDING (first launch) ============ -->
+  <section id="screen-onboarding" class="screen hidden">
+    <header class="topbar"><h1>Create your ID</h1></header>
+    <div class="pane">
+      <form id="form-onboarding" class="stack">
+        <p class="hint">This makes a permanent ID for you — no email or phone number needed.</p>
+        <label>Name<input id="ob-name" maxlength="24" required autocomplete="off"></label>
+        <label>Birthday<input id="ob-birthday" type="date" required></label>
+        <label>App Lock password (optional)<input id="ob-lock-password" type="password" autocomplete="off" placeholder="Leave blank to skip"></label>
+        <button type="submit" class="btn-primary" id="ob-submit">Create my ID</button>
+      </form>
+      <button type="button" class="btn-secondary" id="ob-show-restore">Restore from a backup code instead</button>
+      <form id="form-ob-restore" class="stack hidden">
+        <textarea id="ob-restore-text" class="backup-box" rows="2" placeholder="Paste your backup code"></textarea>
+        <button type="submit" class="btn-secondary">Restore</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============ MESSAGES ============ -->
+  <section id="screen-messages" class="screen hidden">
+    <header class="topbar">
+      <div class="chat-heading">
+        <span class="name">Messages</span>
+        <span class="countdown" id="my-id-text" title="Tap to copy"></span>
+      </div>
+    </header>
+    <div class="subtabs">
+      <button type="button" data-sub="live" class="active">Live Talkings</button>
+      <button type="button" data-sub="history">History</button>
+    </div>
+    <ul class="chat-list" id="thread-list"></ul>
+    <p class="empty-state" id="thread-empty">No live chats yet.</p>
+    <button id="fab" class="fab" type="button" aria-label="Add">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+    <nav class="bottom-nav"></nav>
+  </section>
+
+  <!-- fab popup: My User ID / QR Scan -->
+  <div id="fab-menu" class="hidden">
+    <div class="menu-back" id="fab-back"></div>
+    <div class="msg-menu">
+      <div class="menu-actions">
+        <button type="button" id="fab-my-id">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM19 14h2v2h-2zM14 19h2v2h-2zM19 19h2v2h-2z"/></svg>
+          <span>My User ID</span>
+        </button>
+        <button type="button" id="fab-scan">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V5a1 1 0 0 1 1-1h2M4 17v2a1 1 0 0 0 1 1h2M20 7V5a1 1 0 0 0-1-1h-2M20 17v2a1 1 0 0 1-1 1h-2"/><rect x="9" y="9" width="6" height="6"/></svg>
+          <span>QR Scan</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ SERVERS ============ -->
   <section id="screen-servers" class="screen hidden">
     <header class="topbar"><h1>Servers</h1></header>
-    <p class="empty-state">Rooms here are temporary, so there are no persistent servers — just chats that expire.</p>
-    <div class="pane" style="flex:none;padding-top:0">
-      <button class="btn-primary" data-goto="create">New chat</button>
+    <div class="segmented servers-subtabs">
+      <button type="button" data-sub="create" class="active">Create</button>
+      <button type="button" data-sub="local">Local Talk</button>
     </div>
-    <div style="flex:1"></div>
-    <nav class="bottom-nav">
-      <button data-tab="servers" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/></svg><span>Servers</span></button>
-      <button data-tab="messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l1.8-3.6A8.5 8.5 0 1 1 21 11.5Z"/></svg><span>Messages</span></button>
-      <button data-tab="notifications"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9Z"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg><span>Notifications</span></button>
-      <button data-tab="you"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg><span>You</span></button>
-    </nav>
+
+    <div class="subpane pane" data-pane="create">
+      <p class="hint">Share your permanent ID so someone can start a chat with you anytime.</p>
+      <button type="button" class="btn-primary" id="btn-server-share">Show my invite QR</button>
+    </div>
+
+    <div class="subpane hidden servers-local-pane" data-pane="local" id="pane-local">
+      <div class="segmented lt-subtabs">
+        <button type="button" data-ltsub="create" class="active">Create</button>
+        <button type="button" data-ltsub="manage">Manage</button>
+      </div>
+
+      <form id="form-lt-create" class="lt-subpane pane" data-ltpane="create">
+        <label>Server name<input id="lt-name" maxlength="40" required autocomplete="off"></label>
+        <label>Details (optional)<input id="lt-description" maxlength="140" autocomplete="off"></label>
+        <label>Server password<input id="lt-password" minlength="4" maxlength="64" autocomplete="off" required></label>
+        <div class="row-2">
+          <label>Expires in<input id="lt-duration" type="number" min="1" max="720" value="24" required></label>
+          <label>Unit
+            <select id="lt-hours-days">
+              <option value="hours" selected>Hours</option>
+              <option value="days">Days</option>
+            </select>
+          </label>
+        </div>
+        <button type="submit" class="btn-primary">Create server</button>
+      </form>
+
+      <div class="lt-subpane hidden pane" data-ltpane="manage">
+        <p class="hint">Servers you've created on this device. Tap one to see who's inside.</p>
+        <ul class="chat-list" id="manage-room-list"></ul>
+        <p class="empty-state" id="manage-empty">You haven't created a Local Talk server yet.</p>
+      </div>
+    </div>
+
+    <nav class="bottom-nav"></nav>
   </section>
 
-  <!-- ============ NOTIFICATIONS (placeholder) ============ -->
-  <section id="screen-notifications" class="screen hidden">
-    <header class="topbar"><h1>Notifications</h1></header>
-    <p class="empty-state">You're all caught up.</p>
-    <div style="flex:1"></div>
-    <nav class="bottom-nav">
-      <button data-tab="servers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/></svg><span>Servers</span></button>
-      <button data-tab="messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l1.8-3.6A8.5 8.5 0 1 1 21 11.5Z"/></svg><span>Messages</span></button>
-      <button data-tab="notifications" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9Z"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg><span>Notifications</span></button>
-      <button data-tab="you"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg><span>You</span></button>
-    </nav>
-  </section>
-
-  <!-- ============ YOU ============ -->
-  <section id="screen-you" class="screen hidden">
-    <header class="topbar"><h1>You</h1></header>
+  <!-- ============ SETTINGS ============ -->
+  <section id="screen-settings" class="screen hidden">
+    <header class="topbar"><h1>Settings</h1></header>
     <div class="pane">
-      <label>Display name<input id="you-name" maxlength="24" placeholder="Anonymous"></label>
-      <button class="btn-secondary" id="btn-save-name">Save name</button>
-      <button class="btn-secondary" id="btn-clear-history">Clear local chat history</button>
-      <p class="hint">Rooms don't have accounts — this name is just remembered on this device and prefilled next time you create or join a chat.</p>
+      <h2 class="section-h">Profile</h2>
+      <form id="form-set-profile" class="stack">
+        <label>Name<input id="set-name" maxlength="24" required></label>
+        <label>Birthday<input id="set-birthday" type="date" required></label>
+        <label>Bio<input id="set-bio" maxlength="80" placeholder="A short line about you"></label>
+        <button type="submit" class="btn-secondary">Save profile</button>
+      </form>
+
+      <h2 class="section-h">Theme &amp; Look</h2>
+      <div class="stack">
+        <label>Theme
+          <select id="set-theme">
+            <option value="amoled">AMOLED Black</option>
+            <option value="dark">Dark Grey</option>
+            <option value="light">Light</option>
+          </select>
+        </label>
+        <label>Text color
+          <select id="set-text-color">
+            <option value="white">White</option>
+            <option value="ivory">Ivory</option>
+            <option value="mint">Mint</option>
+            <option value="sand">Sand</option>
+          </select>
+        </label>
+        <label>Font
+          <select id="set-font">
+            <option value="system">System</option>
+            <option value="rounded">Rounded</option>
+            <option value="serif">Serif</option>
+            <option value="mono">Monospace</option>
+          </select>
+        </label>
+      </div>
+
+      <h2 class="section-h">Storage</h2>
+      <div class="stack">
+        <p class="hint" id="storage-used">0 KB</p>
+        <p class="hint" id="storage-detail"></p>
+        <button type="button" class="btn-secondary" id="btn-clear-cache">Clear local &amp; cloud cache</button>
+        <div id="clear-confirm" class="stack hidden">
+          <p class="hint">This clears this device's chat list and servers, and deletes your own messages from every chat it remembers. It can't be undone. Continue?</p>
+          <div class="row-2">
+            <button type="button" class="btn-secondary" id="btn-clear-cancel">Cancel</button>
+            <button type="button" class="btn-primary" id="btn-clear-go">Clear everything</button>
+          </div>
+        </div>
+      </div>
+
+      <h2 class="section-h">App Lock</h2>
+      <div class="stack">
+        <label class="checkbox"><input type="checkbox" id="set-applock-toggle"> Require a password to open the app</label>
+        <div id="set-applock-fields" class="stack hidden">
+          <label>New password<input id="set-applock-new" type="password" autocomplete="off"></label>
+          <button type="button" class="btn-secondary" id="btn-set-applock-save">Save App Lock password</button>
+        </div>
+      </div>
+
+      <h2 class="section-h">Backup &amp; Restore</h2>
+      <div class="stack">
+        <p class="hint">Export a backup code and keep it somewhere safe — it's the only way to recover your ID if this device's storage is ever cleared.</p>
+        <button type="button" class="btn-secondary" id="btn-export-backup">Export backup code</button>
+        <textarea id="backup-export-text" class="backup-box" rows="2" readonly placeholder="Your backup code will appear here"></textarea>
+        <form id="form-import-backup" class="stack">
+          <label>Restore from a backup code<textarea id="backup-import-text" class="backup-box" rows="2" placeholder="Paste your backup code"></textarea></label>
+          <button type="submit" class="btn-secondary">Restore</button>
+        </form>
+      </div>
     </div>
-    <nav class="bottom-nav">
-      <button data-tab="servers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/></svg><span>Servers</span></button>
-      <button data-tab="messages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l1.8-3.6A8.5 8.5 0 1 1 21 11.5Z"/></svg><span>Messages</span></button>
-      <button data-tab="notifications"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9Z"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg><span>Notifications</span></button>
-      <button data-tab="you" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg><span>You</span></button>
-    </nav>
+    <nav class="bottom-nav"></nav>
   </section>
 
-  <!-- ============ CREATE / JOIN ============ -->
-  <section id="screen-create" class="screen hidden">
-    <header class="topbar">
-      <button class="icon-btn" data-goto="home" aria-label="Back">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
-      </button>
-      <h1>New Chat</h1>
-    </header>
-    <div class="segmented">
-      <button data-mode="create" class="active">Create</button>
-      <button data-mode="join">Join</button>
-      <button data-mode="local">Local Talk</button>
-    </div>
-
-    <form id="form-create" class="pane">
-      <label>Your name<input id="create-name" maxlength="24" required autocomplete="off"></label>
-      <label>Duration
-        <select id="create-duration">
-          <option value="5">5 minutes</option>
-          <option value="10">10 minutes</option>
-          <option value="30" selected>30 minutes</option>
-          <option value="60">1 hour</option>
-        </select>
-      </label>
-      <label class="checkbox"><input type="checkbox" id="create-local"> Local Talk (password-protected)</label>
-      <label id="create-password-wrap" class="hidden">Server password<input id="create-password" minlength="4" maxlength="64" autocomplete="off"></label>
-      <button type="submit" class="btn-primary">Create room</button>
-    </form>
-
-    <form id="form-join" class="pane hidden">
-      <label>Your name<input id="join-name" maxlength="24" required autocomplete="off"></label>
-      <label>Room code<input id="join-code" maxlength="8" autocapitalize="characters" autocomplete="off" placeholder="ABCD1234"></label>
-      <button type="submit" class="btn-primary">Join</button>
-    </form>
-
-    <form id="form-local" class="pane hidden">
-      <label>Your name<input id="local-name" maxlength="24" required autocomplete="off"></label>
-      <label>Room code<input id="local-code" maxlength="8" autocapitalize="characters" autocomplete="off" placeholder="ABCD1234"></label>
-      <label>Server password<input id="local-password" type="password" required autocomplete="off"></label>
-      <button type="submit" class="btn-primary">Connect</button>
-    </form>
-
-    <div id="create-result" class="pane result-card hidden">
-      <p class="hint">Share this code, or the link below</p>
-      <p class="room-code" id="result-code">--------</p>
-      <canvas id="result-qr" width="200" height="200"></canvas>
-      <p class="join-link" id="result-link"></p>
-      <button class="btn-secondary" id="btn-copy-link">Copy link</button>
-      <button class="btn-primary" id="btn-enter-room">Open chat</button>
-    </div>
-  </section>
-
-  <!-- ============ CHAT ============ -->
-  <section id="screen-chat" class="screen hidden">
+  <!-- ============ THREAD (chat: Local Talk servers + permanent conversations share this) ============ -->
+  <section id="screen-thread" class="screen hidden">
     <header class="chat-topbar">
-      <button class="icon-btn" data-goto="home" aria-label="Back">
+      <button type="button" class="icon-btn" id="thread-back" aria-label="Back">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
       <div class="chat-heading">
-        <span class="name" id="chat-title">Room</span>
-        <span class="countdown" id="chat-countdown">--:--</span>
+        <span class="name" id="thread-title">Chat</span>
+        <span class="countdown hidden" id="thread-countdown">--:--</span>
       </div>
-      <button class="online-pill" id="btn-participants" aria-label="Participants">
-        <span class="dot"></span><span id="online-count">1</span>
+      <button type="button" class="icon-btn hidden" id="thread-manage-btn" aria-label="Manage">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
       </button>
-      <button class="leave-btn" id="btn-leave">Leave</button>
+      <button type="button" class="icon-btn hidden" id="btn-participants" aria-label="Participants">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 19v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 19v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg>
+      </button>
+      <button type="button" class="leave-btn hidden" id="thread-leave">Leave</button>
     </header>
 
     <div class="pinned-banner hidden" id="pinned-banner">
@@ -159,49 +221,117 @@
       <span id="pinned-text">Pinned message</span>
     </div>
 
-    <main class="messages" id="messages" aria-live="polite"></main>
+    <main class="messages" id="thread-messages" aria-live="polite"></main>
 
     <div class="reply-banner hidden" id="reply-banner">
       <span class="txt" id="reply-text"></span>
-      <button class="icon-btn" id="btn-cancel-reply">
+      <button type="button" class="icon-btn" id="btn-cancel-reply">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
       </button>
     </div>
 
     <div class="upload-progress hidden" id="upload-progress"></div>
 
-    <form class="composer" id="form-send">
+    <form class="composer" id="form-thread-send">
       <input type="file" id="file-input" accept="image/*" hidden>
       <button type="button" class="icon-btn" id="btn-attach" aria-label="Attach image">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21.4 11.1 12.3 20a5 5 0 0 1-7.1-7.1l9-9a3.5 3.5 0 0 1 5 5l-9 9a2 2 0 0 1-2.8-2.8l8-8"/></svg>
       </button>
-      <textarea id="msg-input" rows="1" maxlength="2000" placeholder="Message"></textarea>
-      <button type="submit" class="icon-btn send-btn" id="btn-send" aria-label="Send" disabled>
+      <textarea id="thread-input" rows="1" maxlength="2000" placeholder="Message"></textarea>
+      <button type="submit" class="icon-btn send-btn" id="btn-thread-send" aria-label="Send" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"/></svg>
       </button>
     </form>
 
-    <div class="expired-banner hidden" id="expired-banner">This room has expired.</div>
+    <div class="expired-banner hidden" id="thread-expired">This server has expired.</div>
   </section>
 
-  <!-- participants drawer (shared) -->
-  <div id="drawer" class="drawer-hidden">
+  <!-- participants drawer (Local Talk servers) -->
+  <div id="thread-drawer" class="drawer-hidden">
     <div class="drawer-back" id="drawer-back"></div>
     <aside class="participants-drawer">
-      <h2 id="drawer-count">Participants</h2>
+      <h2>Participants</h2>
       <ul class="p-list" id="p-list"></ul>
     </aside>
   </div>
+
+  <!-- ============ SHARE (My User ID) ============ -->
+  <section id="screen-share" class="screen hidden">
+    <header class="topbar">
+      <button type="button" class="icon-btn" id="share-back" aria-label="Back">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <h1>My User ID</h1>
+    </header>
+    <div class="pane result-card">
+      <p class="hint">Anyone with this ID (or QR code) can start a permanent chat with you.</p>
+      <p class="room-code" id="share-id-text">----------------</p>
+      <img id="share-qr" width="220" height="220" alt="Your QR code">
+      <p class="join-link" id="share-link-text"></p>
+      <div class="row-2">
+        <button type="button" class="btn-secondary" id="btn-copy-id">Copy ID</button>
+        <button type="button" class="btn-secondary" id="btn-copy-link">Copy link</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SCAN (QR Scan / add by code) ============ -->
+  <section id="screen-scan" class="screen hidden">
+    <header class="topbar">
+      <button type="button" class="icon-btn" id="scan-back" aria-label="Back">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <h1>Add by ID or code</h1>
+    </header>
+    <div class="pane">
+      <div id="scan-reader-wrap">
+        <div id="qr-reader"></div>
+      </div>
+      <p class="hint" id="scan-status"></p>
+      <form id="form-scan-manual" class="stack">
+        <label>Enter a user ID or server code<input id="scan-manual-id" maxlength="16" autocapitalize="characters" autocomplete="off"></label>
+        <button type="submit" class="btn-secondary">Add</button>
+      </form>
+      <form id="form-join-room" class="stack hidden">
+        <p class="hint" id="join-room-info"></p>
+        <label>Server password<input id="join-room-password" type="password" required autocomplete="off"></label>
+        <button type="submit" class="btn-primary">Join server</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============ MANAGE (Local Talk dashboard) ============ -->
+  <section id="screen-manage" class="screen hidden">
+    <header class="topbar">
+      <button type="button" class="icon-btn" id="manage-back" aria-label="Back">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <h1 id="manage-title">Manage</h1>
+    </header>
+    <div class="pane">
+      <div class="result-card" style="gap:8px">
+        <p class="room-code" id="manage-code">--------</p>
+        <img id="manage-qr" width="160" height="160" alt="Server QR code">
+        <p class="hint" id="manage-desc"></p>
+        <div class="row-2">
+          <button type="button" class="btn-secondary" id="btn-copy-room">Copy code</button>
+          <button type="button" class="btn-secondary" id="btn-open-room">Open chat</button>
+        </div>
+      </div>
+      <h2 class="section-h" id="manage-count">Inside now</h2>
+      <ul class="p-list" id="manage-participants" style="padding:0"></ul>
+    </div>
+  </section>
 
   <!-- long-press message menu -->
   <div id="menu-wrap" class="hidden">
     <div class="menu-back" id="menu-back"></div>
     <div class="msg-menu" id="msg-menu">
       <div class="menu-reactions" id="menu-reactions">
-        <button data-emoji="✅">✅</button>
-        <button data-emoji="😢">😢</button>
-        <button data-emoji="❌">❌</button>
-        <button data-emoji="🔥">🔥</button>
+        <button type="button" data-emoji="✅">✅</button>
+        <button type="button" data-emoji="😢">😢</button>
+        <button type="button" data-emoji="❌">❌</button>
+        <button type="button" data-emoji="🔥">🔥</button>
       </div>
       <div class="menu-actions" id="menu-actions"></div>
     </div>
@@ -213,7 +343,7 @@
 <script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore-compat.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
+<script src="https://unpkg.com/html5-qrcode"></script>
 <script src="./app.js"></script>
 </body>
 </html>
