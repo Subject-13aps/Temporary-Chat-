@@ -42,6 +42,7 @@
   <!-- ============ MESSAGES ============ -->
   <section id="screen-messages" class="screen hidden">
     <header class="topbar">
+      <button type="button" class="avatar-mini" id="my-avatar" aria-label="Your profile"></button>
       <div class="chat-heading">
         <span class="name">Messages</span>
         <span class="countdown" id="my-id-text" title="Tap to copy"></span>
@@ -126,6 +127,12 @@
     <header class="topbar"><h1>Settings</h1></header>
     <div class="pane">
       <h2 class="section-h">Profile</h2>
+      <div class="avatar-upload">
+        <button type="button" class="avatar-big" id="set-avatar-preview" aria-label="Change profile picture"></button>
+        <input type="file" id="avatar-input" accept="image/*" hidden>
+        <button type="button" class="btn-secondary" id="btn-change-avatar">Change photo</button>
+        <div class="upload-progress hidden" id="avatar-progress"></div>
+      </div>
       <form id="form-set-profile" class="stack">
         <label>Name<input id="set-name" maxlength="24" required></label>
         <label>Birthday<input id="set-birthday" type="date" required></label>
@@ -343,7 +350,7 @@
 <script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore-compat.js"></script>
-<script src="https://unpkg.com/html5-qrcode"></script>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script src="./app.js"></script>
 </body>
 </html>

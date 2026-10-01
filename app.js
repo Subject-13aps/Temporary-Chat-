@@ -19,16 +19,17 @@ const USER_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz";
 const ROOM_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"; // 8 chars = Local Talk server code
 const U16 = "[2-9A-HJ-NP-Za-hjkmnp-z]{16}";
 const R8 = "[2-9A-HJ-NP-Z]{8}";
-const HEARTBEAT_MS = 25000;
-const STALE_MS = 55000;
+const HEARTBEAT_MS = 25000; // Local Talk participant heartbeat AND global presence heartbeat
+const STALE_MS = 55000; // beyond this with no heartbeat, treat someone as offline
 const RELOCK_MS = 30000; // ask for the App Lock password again after this long in the background
 const MAX_IMAGE_BYTES = 32 * 1024 * 1024; // ImgBB's own limit
-const LS_PROFILE = "ec2_profile"; // {userId, name, birthday, bio, recoverySecret}
+const LS_PROFILE = "ec2_profile"; // {userId, name, birthday, bio, photoURL, recoverySecret}
 const LS_THREADS = "ec2_threads"; // chats + Local Talk rooms known on this device
 const LS_HOSTED = "ec2_hosted_rooms"; // Local Talk servers created on this device
 const LS_APPLOCK = "ec2_applock"; // {on, hash}
 const LS_THEME = "ec2_theme"; // {theme, textColor, font}
 const LS_SENT_BYTES = "ec2_sent_bytes"; // running total of image uploads from this device
+const SS_UNLOCKED = "ec2_unlocked"; // sessionStorage — survives a pull-to-refresh reload, cleared on full app close
 
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
@@ -60,6 +61,19 @@ function initials(name) {
   const parts = (name || "").trim().split(/\s+/).filter(Boolean).slice(0, 2);
   return parts.length ? parts.map((w) => w[0].toUpperCase()).join("") : "?";
 }
+/** Fills a plain-div avatar with either a photo (as a background-image) or initials text. */
+function renderAvatar(node, name, photoURL) {
+  if (!node) return;
+  const safe = typeof photoURL === "string" && photoURL.startsWith("https://") ? photoURL : null;
+  node.classList.toggle("has-photo", !!safe);
+  if (safe) {
+    node.style.backgroundImage = `url("${safe}")`;
+    node.textContent = "";
+  } else {
+    node.style.backgroundImage = "";
+    node.textContent = initials(name);
+  }
+}
 function fmtTime(ts) {
   const d = ts && ts.toDate ? ts.toDate() : new Date();
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -77,6 +91,16 @@ function timeLeftLabel(expiresAt) {
   if (m < 60) return `${Math.max(m, 1)}m left`;
   if (m < 1440) return `${Math.round(m / 60)}h left`;
   return `${Math.round(m / 1440)}d left`;
+}
+/** lastSeen is stored as a plain millisecond number (Date.now()), not a Firestore Timestamp. */
+function fmtLastSeen(lastSeenMs) {
+  if (!lastSeenMs) return "Offline";
+  const mins = Math.max(0, Math.round((Date.now() - lastSeenMs) / 60000));
+  if (mins < 1) return "Last seen just now";
+  if (mins < 60) return `Last seen ${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `Last seen ${hrs}h ago`;
+  return `Last seen ${Math.round(hrs / 24)}d ago`;
 }
 function fmtBytes(n) {
   if (!n) return "0 KB";
@@ -117,6 +141,22 @@ function toast(msg) {
 function setQr(img, data, size) {
   img.onerror = () => toast("The QR image couldn't load — check your connection.");
   img.src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(data)}`;
+}
+
+/* ---------- ImgBB upload (shared by chat photos and profile pictures) ---------- */
+
+async function uploadToImgbb(file, expirationSeconds) {
+  const form = new FormData();
+  form.append("image", file);
+  if (expirationSeconds) form.append("expiration", String(expirationSeconds));
+  const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_KEY}`, { method: "POST", body: form });
+  const json = await res.json();
+  if (!json.success) throw new Error("upload failed");
+  return {
+    url: json.data.url,
+    mime: (json.data.image && json.data.image.mime) || file.type,
+    size: Number(json.data.size) || file.size,
+  };
 }
 
 /* ---------- SHA-256: Web Crypto when available, pure-JS fallback for non-secure WebViews ---------- */
@@ -169,6 +209,21 @@ async function sha256Hex(str) {
   return sha256Js(bytes);
 }
 
+/* ================= Bug fix: pull-to-refresh reloads the app ================= */
+/* CSS (overscroll-behavior[-y]: none) does most of the work; this stops the
+   gesture at the exact scroll boundary so it never reaches the WebView itself,
+   and separately blocks pinch-zoom. */
+
+document.body.style.overscrollBehavior = "none";
+let ptrStartY = 0;
+document.addEventListener("touchstart", (e) => { ptrStartY = e.touches[0] ? e.touches[0].clientY : 0; }, { passive: true });
+document.addEventListener("touchmove", (e) => {
+  if (e.touches.length > 1) { e.preventDefault(); return; } // pinch-zoom
+  const scroller = e.target.closest(".messages, .pane, .chat-list, .p-list");
+  const atTop = !scroller || scroller.scrollTop <= 0;
+  if (atTop && e.touches[0].clientY > ptrStartY) e.preventDefault(); // at the top edge, moving down = refresh gesture
+}, { passive: false });
+
 /* ================= this device's storage ================= */
 
 function readJson(key, fallback) {
@@ -197,6 +252,60 @@ function getSentBytes() { return Number(localStorage.getItem(LS_SENT_BYTES)) || 
 function addSentBytes(n) { localStorage.setItem(LS_SENT_BYTES, String(getSentBytes() + (n || 0))); }
 function getAppLock() { return readJson(LS_APPLOCK, { on: false, hash: null }); }
 function saveAppLock(v) { localStorage.setItem(LS_APPLOCK, JSON.stringify(v)); }
+
+/* ================= live cache of other users (photo + presence) ================= */
+
+const userInfoCache = new Map(); // userId -> {name, bio, photoURL, isOnline, lastSeen}
+function getCachedUser(userId) { return userInfoCache.get(userId) || {}; }
+function isPresentOnline(info) { return !!(info && info.isOnline && info.lastSeen && Date.now() - info.lastSeen < STALE_MS); }
+
+const listUserSubs = new Map();
+/** Keeps a live users/{id} listener for exactly the contacts shown in the current thread list. */
+function syncListUserSubs() {
+  const ids = new Set(getThreads().filter((t) => t.kind === "convo").map((t) => t.otherUserId));
+  for (const id of [...listUserSubs.keys()]) if (!ids.has(id)) { listUserSubs.get(id)(); listUserSubs.delete(id); }
+  for (const id of ids) {
+    if (listUserSubs.has(id)) continue;
+    listUserSubs.set(id, db.collection("users").doc(id).onSnapshot((snap) => {
+      userInfoCache.set(id, snap.data() || {});
+      if (!$("#screen-messages").classList.contains("hidden")) renderThreadLists();
+    }, () => {}));
+  }
+}
+function teardownListUserSubs() { for (const unsub of listUserSubs.values()) unsub(); listUserSubs.clear(); }
+
+const threadUserSubs = new Map();
+/** Keeps a live users/{id} listener for exactly the senders visible in the open thread. */
+function syncThreadUserSubs() {
+  const ids = new Set([...msgCache.values()].map((m) => m.senderUserId).filter(Boolean));
+  for (const id of [...threadUserSubs.keys()]) if (!ids.has(id)) { threadUserSubs.get(id)(); threadUserSubs.delete(id); }
+  for (const id of ids) {
+    if (threadUserSubs.has(id)) continue;
+    threadUserSubs.set(id, db.collection("users").doc(id).onSnapshot((snap) => {
+      userInfoCache.set(id, snap.data() || {});
+      if (thread) renderMessages();
+    }, () => {}));
+  }
+}
+function teardownThreadUserSubs() { for (const unsub of threadUserSubs.values()) unsub(); threadUserSubs.clear(); }
+
+/* ================= presence: publish this device's own online/offline status ================= */
+
+let presenceTimer = null;
+function setPresence(online) {
+  const p = getProfile();
+  if (!p || !auth.currentUser) return;
+  db.collection("users").doc(p.userId).update({ isOnline: online, lastSeen: Date.now() }).catch(() => {});
+}
+function startPresence() {
+  if (!getProfile()) return;
+  setPresence(true);
+  clearInterval(presenceTimer);
+  presenceTimer = setInterval(() => { if (!document.hidden) setPresence(true); }, HEARTBEAT_MS);
+}
+document.addEventListener("visibilitychange", () => { if (appStarted) setPresence(!document.hidden); });
+window.addEventListener("pagehide", () => setPresence(false));
+window.addEventListener("beforeunload", () => setPresence(false));
 
 /* ================= theme ================= */
 
@@ -237,6 +346,7 @@ const SCREENS = ["onboarding", "messages", "servers", "settings", "thread", "sha
 function showScreen(name) { SCREENS.forEach((s) => $("#screen-" + s).classList.toggle("hidden", s !== name)); }
 function setActiveTab(tab) { $$(".bottom-nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab)); }
 function goTab(tab) {
+  if (tab !== "messages") teardownListUserSubs();
   showScreen(tab);
   setActiveTab(tab);
   if (tab === "messages") { renderMessagesHeader(); renderThreadLists(); }
@@ -264,7 +374,7 @@ document.addEventListener("click", (e) => {
 let hiddenAt = 0;
 function showLock(onUnlocked) {
   const lock = getAppLock();
-  if (!lock.on || !lock.hash) { if (onUnlocked) onUnlocked(); return; }
+  if (!lock.on || !lock.hash || sessionStorage.getItem(SS_UNLOCKED) === "true") { if (onUnlocked) onUnlocked(); return; }
   $("#lock-password").value = "";
   $("#lock-error").textContent = "";
   $("#screen-lock").classList.remove("hidden");
@@ -272,6 +382,7 @@ function showLock(onUnlocked) {
   $("#form-lock").onsubmit = async (e) => {
     e.preventDefault();
     if ((await sha256Hex($("#lock-password").value)) === lock.hash) {
+      try { sessionStorage.setItem(SS_UNLOCKED, "true"); } catch {}
       $("#screen-lock").classList.add("hidden");
       if (onUnlocked) onUnlocked();
     } else {
@@ -283,7 +394,10 @@ function showLock(onUnlocked) {
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) { hiddenAt = Date.now(); return; }
   const lock = getAppLock();
-  if (lock.on && lock.hash && hiddenAt && Date.now() - hiddenAt > RELOCK_MS && $("#screen-lock").classList.contains("hidden")) showLock();
+  if (lock.on && lock.hash && hiddenAt && Date.now() - hiddenAt > RELOCK_MS && $("#screen-lock").classList.contains("hidden")) {
+    try { sessionStorage.removeItem(SS_UNLOCKED); } catch {} // closes the reload-during-relock gap
+    showLock();
+  }
   hiddenAt = 0;
 });
 
@@ -319,7 +433,7 @@ $("#form-onboarding").addEventListener("submit", async (e) => {
     await uref.set({ name, bio: "", createdAt: FieldValue.serverTimestamp(), authUid: auth.currentUser.uid });
     await uref.collection("private").doc("profile").set({ birthday });
     await uref.collection("secret").doc("config").set({ ownerHash });
-    saveProfile({ userId, name, birthday, bio: "", recoverySecret });
+    saveProfile({ userId, name, birthday, bio: "", photoURL: null, recoverySecret });
     if (lockPw) saveAppLock({ on: true, hash: await sha256Hex(lockPw) });
     enterApp();
   } catch {
@@ -335,7 +449,7 @@ async function restoreFromBackup(raw) {
   await ensureSignedIn();
   const recoveryProof = await sha256Hex(blob.recoverySecret);
   await db.collection("users").doc(blob.userId).update({ authUid: auth.currentUser.uid, recoveryProof });
-  saveProfile({ userId: blob.userId, name: blob.name || "", birthday: blob.birthday || "", bio: blob.bio || "", recoverySecret: blob.recoverySecret });
+  saveProfile({ userId: blob.userId, name: blob.name || "", birthday: blob.birthday || "", bio: blob.bio || "", photoURL: blob.photoURL || null, recoverySecret: blob.recoverySecret });
   if (blob.theme) localStorage.setItem(LS_THEME, JSON.stringify(blob.theme));
   if (blob.applock) saveAppLock(blob.applock);
 }
@@ -363,6 +477,7 @@ async function syncIdentity() {
     if (snap.exists && snap.data().authUid !== auth.currentUser.uid && p.recoverySecret) {
       await ref.update({ authUid: auth.currentUser.uid, recoveryProof: await sha256Hex(p.recoverySecret) });
     }
+    if (snap.exists && snap.data().photoURL && snap.data().photoURL !== p.photoURL) patchProfile({ photoURL: snap.data().photoURL });
   } catch {}
 }
 
@@ -371,7 +486,9 @@ async function syncIdentity() {
 function renderMessagesHeader() {
   const p = getProfile();
   $("#my-id-text").textContent = p ? p.userId : "";
+  renderAvatar($("#my-avatar"), p ? p.name : "", p ? p.photoURL : null);
 }
+$("#my-avatar").addEventListener("click", () => goTab("settings"));
 $("#my-id-text").addEventListener("click", () => { const p = getProfile(); if (p) { copyToClipboard(p.userId); toast("ID copied"); } });
 
 let msgsSubTab = "live";
@@ -383,6 +500,7 @@ function setMsgsSubTab(tab) {
 }
 
 function renderThreadLists() {
+  syncListUserSubs();
   const all = getThreads();
   const now = Date.now();
   const live = all.filter((t) => t.kind === "convo" || (t.kind === "room" && (t.expiresAt || 0) > now));
@@ -396,16 +514,26 @@ function renderThreadLists() {
     ? "No live chats yet. Tap + to add someone by ID or join a server."
     : "No past rooms yet. Servers you joined appear here after they expire.";
   for (const t of list) {
+    const info = t.kind === "convo" ? getCachedUser(t.otherUserId) : {};
+    const online = t.kind === "convo" && isPresentOnline(info);
     const li = el("li");
     const btn = el("button", "chat-row");
     btn.type = "button";
+    const wrap2 = el("div", "avatar-wrap");
+    const av = el("div", "avatar");
+    renderAvatar(av, t.kind === "convo" ? (info.name || t.name) : t.name, t.kind === "convo" ? info.photoURL : null);
+    wrap2.appendChild(av);
+    if (t.kind === "convo") wrap2.appendChild(el("span", "status-dot" + (online ? " online" : "")));
     const meta = el("div", "meta");
     const l1 = el("div", "line1");
-    l1.append(el("span", "rname", t.name), el("span", "time", t.kind === "room" ? (showLive ? timeLeftLabel(t.expiresAt) : "expired") : ""));
+    let timeLabel;
+    if (t.kind === "room") timeLabel = showLive ? timeLeftLabel(t.expiresAt) : "expired";
+    else timeLabel = online ? "online" : (info.lastSeen ? fmtLastSeen(info.lastSeen) : "");
+    l1.append(el("span", "rname", t.name), el("span", "time", timeLabel));
     // History shows only the Room ID — never any old messages.
     const preview = showLive ? (t.lastMessage || (t.kind === "convo" ? "Tap to open" : "Local Talk server")) : `Room ID: ${t.id}`;
     meta.append(l1, el("div", "preview", preview));
-    btn.append(el("div", "avatar", initials(t.name)), meta);
+    btn.append(wrap2, meta);
     btn.addEventListener("click", () => (showLive ? openThreadFromList(t) : toast("This room has expired — its messages are gone.")));
     li.appendChild(btn);
     wrap.appendChild(li);
@@ -477,12 +605,28 @@ $("#form-scan-manual").addEventListener("submit", (e) => {
   handleTarget(target);
 });
 
+/** Bug fix: explicitly probe for camera permission before touching the scanner library,
+    so a denial is reported clearly instead of the scanner just silently not opening. */
+async function requestCameraPermission() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return { ok: false, reason: "unsupported" };
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    stream.getTracks().forEach((t) => t.stop()); // just probing — html5-qrcode opens its own stream next
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: err && err.name === "NotAllowedError" ? "denied" : "error" };
+  }
+}
 async function startScanner() {
   stopScanner();
   const status = $("#scan-status");
   if (typeof Html5Qrcode === "undefined") { status.textContent = "The camera scanner didn't load — type the ID or code below instead."; return; }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    status.textContent = "Camera access isn't available in this app view — type the ID or code below instead.";
+  status.textContent = "Requesting camera permission…";
+  const perm = await requestCameraPermission();
+  if (!perm.ok) {
+    status.textContent = perm.reason === "denied"
+      ? "Camera permission is required to scan QR codes."
+      : "Camera access isn't available in this app view — type the ID or code below instead.";
     return;
   }
   const qr = new Html5Qrcode("qr-reader");
@@ -500,7 +644,7 @@ async function startScanner() {
     }
     if (scanner === qr) status.textContent = "Point the camera at a QR code.";
   } catch {
-    if (scanner === qr) status.textContent = "Couldn't open the camera (permission denied or unavailable) — type the ID or code below instead.";
+    if (scanner === qr) status.textContent = "Couldn't open the camera — type the ID or code below instead.";
   }
 }
 function stopScanner() {
@@ -579,6 +723,7 @@ async function openConvo(otherUserId, otherName) {
     await ensureSignedIn();
     const u = await db.collection("users").doc(otherUserId).get();
     if (u.exists && u.data().name) otherName = u.data().name;
+    if (u.exists) userInfoCache.set(otherUserId, u.data());
     const snap = await ref.get();
     if (!snap.exists) await ref.set({ members: [me.userId, otherUserId].sort(), createdAt: FieldValue.serverTimestamp() });
     notifyInbox(otherUserId);
@@ -663,7 +808,9 @@ function renderManageList() {
     btn.type = "button";
     const meta = el("div", "meta");
     meta.append(el("div", "rname", r.name), el("div", "preview", r.expiresAt > Date.now() ? timeLeftLabel(r.expiresAt) : "expired"));
-    btn.append(el("div", "avatar", initials(r.name)), meta);
+    const av = el("div", "avatar");
+    renderAvatar(av, r.name, null);
+    btn.append(av, meta);
     btn.addEventListener("click", () => openManageDashboard(r, "servers"));
     li.appendChild(btn);
     wrap.appendChild(li);
@@ -731,7 +878,7 @@ function openRoom(code, room) {
 
 let manageUnsub = null, manageTimer = null, manageRoom = null, manageBackTo = "servers";
 const manageParticipants = new Map();
-function isOnline(p) { return !!(p.lastActive && Date.now() - p.lastActive.toMillis() < STALE_MS); }
+function isOnlineParticipant(p) { return !!(p.lastActive && Date.now() - p.lastActive.toMillis() < STALE_MS); }
 
 function openManageDashboard(r, backTo) {
   closeManage();
@@ -761,11 +908,11 @@ function renderManageParticipants() {
   const list = $("#manage-participants");
   list.innerHTML = "";
   const rows = [...manageParticipants.values()].sort((a, b) => (a.joinedAt ? a.joinedAt.toMillis() : 0) - (b.joinedAt ? b.joinedAt.toMillis() : 0));
-  $("#manage-count").textContent = `Inside now: ${rows.filter(isOnline).length} online · ${rows.length} joined`;
+  $("#manage-count").textContent = `Inside now: ${rows.filter(isOnlineParticipant).length} online · ${rows.length} joined`;
   if (!rows.length) { list.appendChild(el("li", "p-row", "No one has joined yet.")); return; }
   for (const p of rows) {
     const li = el("li", "p-row");
-    li.append(el("span", "status" + (isOnline(p) ? " on" : "")), el("span", "pname", p.name || "Anonymous"));
+    li.append(el("span", "status" + (isOnlineParticipant(p) ? " on" : "")), el("span", "pname", p.name || "Anonymous"));
     list.appendChild(li);
   }
 }
@@ -844,6 +991,7 @@ function handleExpired() {
 function closeThread() {
   if (unsubMessages) unsubMessages();
   unsubMessages = null;
+  teardownThreadUserSubs();
   clearInterval(heartbeatTimer);
   clearInterval(countdownTimer);
   $("#thread-expired").classList.add("hidden");
@@ -870,6 +1018,7 @@ $("#thread-manage-btn").addEventListener("click", () => {
 
 function isNearBottom(node) { return node.scrollHeight - node.scrollTop - node.clientHeight < 80; }
 function renderMessages() {
+  syncThreadUserSubs();
   const wrap = $("#thread-messages");
   const nearBottom = isNearBottom(wrap);
   const prevScrollTop = wrap.scrollTop;
@@ -888,12 +1037,17 @@ function renderMessages() {
 function buildMsgRow(id, m, grouped) {
   const row = el("div", "msg-row" + (grouped ? " grouped" : ""));
   const slot = el("div", "avatar-slot");
-  slot.appendChild(el("div", "avatar-sm", initials(m.senderName)));
+  const avSm = el("div", "avatar-sm");
+  const info = m.senderUserId ? getCachedUser(m.senderUserId) : {};
+  renderAvatar(avSm, m.senderName, info.photoURL);
+  slot.appendChild(avSm);
   row.appendChild(slot);
   const body = el("div", "msg-body");
   if (!grouped) {
     const head = el("div", "msg-head");
-    head.append(el("span", "sender", m.senderName || "Anonymous"), el("span", "time", fmtTime(m.createdAt)));
+    head.appendChild(el("span", "sender", m.senderName || "Anonymous"));
+    if (m.senderUserId) head.appendChild(el("span", "status-dot" + (isPresentOnline(info) ? " online" : "")));
+    head.appendChild(el("span", "time", fmtTime(m.createdAt)));
     body.appendChild(head);
   }
   if (m.pinned) body.appendChild(el("div", "pin-flag", "📌 Pinned"));
@@ -1058,7 +1212,7 @@ $("#btn-participants").addEventListener("click", async () => {
     qs.forEach((d) => {
       const p = d.data();
       const li = el("li", "p-row");
-      li.append(el("span", "status" + (isOnline(p) ? " on" : "")), el("span", "pname", p.name || "Anonymous"));
+      li.append(el("span", "status" + (isOnlineParticipant(p) ? " on" : "")), el("span", "pname", p.name || "Anonymous"));
       list.appendChild(li);
     });
   } catch {
@@ -1084,7 +1238,7 @@ async function sendMessage(extra) {
   if (!thread) return;
   const me = getProfile();
   const base = Object.assign({
-    senderUid: auth.currentUser.uid, senderName: me ? me.name : "Anonymous",
+    senderUid: auth.currentUser.uid, senderUserId: me ? me.userId : "", senderName: me ? me.name : "Anonymous",
     createdAt: FieldValue.serverTimestamp(), edited: false, pinned: false, reactions: {},
     replyTo: replyTarget ? { id: replyTarget.id, sender: replyTarget.sender, snippet: replyTarget.snippet } : null,
     text: null, imageUrl: null, imageMime: null, imageSize: null,
@@ -1138,15 +1292,12 @@ async function uploadAndSend(file) {
   prog.textContent = "Uploading photo…";
   prog.classList.remove("hidden");
   try {
-    const form = new FormData();
-    form.append("image", file);
-    if (thread.expiresAtMs) form.append("expiration", String(Math.min(15552000, Math.max(60, Math.round((thread.expiresAtMs - Date.now()) / 1000)))));
-    const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_KEY}`, { method: "POST", body: form });
-    const json = await res.json();
-    if (!json.success) throw new Error("upload failed");
-    const size = Number(json.data.size) || file.size;
+    const expSeconds = thread.expiresAtMs
+      ? Math.min(15552000, Math.max(60, Math.round((thread.expiresAtMs - Date.now()) / 1000)))
+      : undefined;
+    const { url, mime, size } = await uploadToImgbb(file, expSeconds);
     addSentBytes(size);
-    await sendMessage({ kind: "image", imageUrl: json.data.url, imageMime: (json.data.image && json.data.image.mime) || file.type, imageSize: size });
+    await sendMessage({ kind: "image", imageUrl: url, imageMime: mime, imageSize: size });
   } catch { toast("Photo upload failed. Check your connection and try again."); }
   finally { prog.classList.add("hidden"); }
 }
@@ -1156,6 +1307,7 @@ async function uploadAndSend(file) {
 function renderSettings() {
   const p = getProfile();
   if (!p) return;
+  renderAvatar($("#set-avatar-preview"), p.name, p.photoURL);
   $("#set-name").value = p.name || "";
   $("#set-birthday").value = p.birthday || "";
   $("#set-bio").value = p.bio || "";
@@ -1169,6 +1321,31 @@ function renderSettings() {
   $("#storage-used").textContent = `${fmtBytes(getSentBytes())} of photos uploaded from this device (estimate)`;
   $("#storage-detail").textContent = `${getThreads().length} chats and ${getHostedRooms().length} servers remembered on this device`;
 }
+$("#set-avatar-preview").addEventListener("click", () => $("#avatar-input").click());
+$("#btn-change-avatar").addEventListener("click", () => $("#avatar-input").click());
+$("#avatar-input").addEventListener("change", async () => {
+  const file = $("#avatar-input").files[0];
+  $("#avatar-input").value = "";
+  if (!file) return;
+  if (!file.type.startsWith("image/")) return toast("Please choose an image file.");
+  if (file.size > MAX_IMAGE_BYTES) return toast("That image is larger than 32 MB.");
+  const prog = $("#avatar-progress");
+  prog.textContent = "Uploading photo…";
+  prog.classList.remove("hidden");
+  try {
+    const { url } = await uploadToImgbb(file); // no expiration — profile pictures don't self-delete
+    const p = patchProfile({ photoURL: url });
+    await ensureSignedIn();
+    await db.collection("users").doc(p.userId).update({ photoURL: url });
+    renderAvatar($("#set-avatar-preview"), p.name, url);
+    renderMessagesHeader();
+    toast("Profile picture updated");
+  } catch {
+    toast("Could not upload that photo. Check your connection and try again.");
+  } finally {
+    prog.classList.add("hidden");
+  }
+});
 $("#form-set-profile").addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = $("#set-name").value.trim();
@@ -1181,6 +1358,7 @@ $("#form-set-profile").addEventListener("submit", async (e) => {
     const uref = db.collection("users").doc(p.userId);
     await uref.update({ name, bio });
     await uref.collection("private").doc("profile").set({ birthday });
+    renderMessagesHeader();
     toast("Profile saved");
   } catch { toast("Saved on this device, but couldn't sync to the cloud right now."); }
 });
@@ -1237,7 +1415,7 @@ $("#btn-clear-go").addEventListener("click", async () => {
 
 $("#btn-export-backup").addEventListener("click", () => {
   const p = getProfile();
-  const blob = { v: 2, userId: p.userId, recoverySecret: p.recoverySecret, name: p.name, birthday: p.birthday, bio: p.bio, theme: getThemePrefs(), applock: getAppLock() };
+  const blob = { v: 3, userId: p.userId, recoverySecret: p.recoverySecret, name: p.name, birthday: p.birthday, bio: p.bio, photoURL: p.photoURL || null, theme: getThemePrefs(), applock: getAppLock() };
   const code = btoa(unescape(encodeURIComponent(JSON.stringify(blob))));
   $("#backup-export-text").value = code;
   copyToClipboard(code);
@@ -1251,6 +1429,7 @@ function enterApp() {
   if (appStarted) return;
   appStarted = true;
   goTab("messages");
+  startPresence();
   syncIdentity().then(startInbox, startInbox);
 }
 showLock(() => {
